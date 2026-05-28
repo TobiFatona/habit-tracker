@@ -2,10 +2,11 @@
   "expo": {
     "name": "my-app",
     "slug": "my-app",
+    "scheme": "my-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true
     },
@@ -20,6 +21,11 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-asset",
+      "expo-router",
+      ["expo-notifications", { "color": "#6C63FF" }]
+    ]
   }
 }
