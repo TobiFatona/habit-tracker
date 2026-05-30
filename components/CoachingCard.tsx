@@ -1,13 +1,31 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { getCoachingNudge } from '../lib/ai';
+import { scheduleCoachingNotification } from '../lib/notifications';
 
 const PURPLE = '#6C63FF';
 const SURFACE = '#1A1929';
+const CACHE_KEY = 'coaching_cache_v1';
 
-function timeAgo(isoOrNow: 'now' | null): string {
-  // We don't know exact time, so just show 'Just now' vs nothing
-  return '';
+function todayStr() {
+  return new Date().toISOString().split('T')[0];
+}
+
+interface CacheEntry {
+  date: string;
+  content: string;
+}
+
+async function loadCache(): Promise<CacheEntry | null> {
+  try {
+    const raw = await AsyncStorage.getItem(CACHE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+async function saveCache(content: string) {
+  await AsyncStorage.setItem(CACHE_KEY, JSON.stringify({ date: todayStr(), content }));
 }
 
 export default function CoachingCard() {
@@ -15,21 +33,52 @@ export default function CoachingCard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const fetchedToday = useRef(false);
 
-  async function load(isRefresh = false) {
-    if (isRefresh) setRefreshing(true);
-    else setLoading(true);
+  function fadeIn() {
+    Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }).start();
+  }
 
+  async function fetchFresh(silent = false) {
+    if (!silent) setLoading(true);
     const result = await getCoachingNudge();
     if (result?.content) {
+      await saveCache(result.content);
+      // Schedule 3 PM push notification with fresh content
+      scheduleCoachingNotification(result.content).catch(() => {});
       setContent(result.content);
-      Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }).start();
+      if (!silent) fadeIn();
     }
     setLoading(false);
     setRefreshing(false);
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    async function init() {
+      const cache = await loadCache();
+      if (cache) {
+        // Show cached content immediately — no skeleton
+        setContent(cache.content);
+        setLoading(false);
+        fadeAnim.setValue(1);
+
+        // Fetch fresh in background if it's a new day
+        if (cache.date !== todayStr() && !fetchedToday.current) {
+          fetchedToday.current = true;
+          fetchFresh(true); // silent — updates content when done
+        }
+      } else {
+        // First ever load — show skeleton, fetch
+        await fetchFresh(false);
+      }
+    }
+    init();
+  }, []);
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    await fetchFresh(false);
+  }
 
   if (loading) {
     return (
@@ -54,7 +103,7 @@ export default function CoachingCard() {
       <View style={styles.header}>
         <Text style={styles.icon}>✨</Text>
         <Text style={styles.title}>Your Daily Insight</Text>
-        <TouchableOpacity onPress={() => load(true)} style={styles.refreshBtn} disabled={refreshing}>
+        <TouchableOpacity onPress={handleRefresh} style={styles.refreshBtn} disabled={refreshing}>
           {refreshing
             ? <ActivityIndicator size="small" color={PURPLE} />
             : <Text style={styles.refreshIcon}>↻</Text>
@@ -76,11 +125,7 @@ const styles = StyleSheet.create({
     borderColor: PURPLE + '44',
     gap: 10,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   icon: { fontSize: 16 },
   title: { flex: 1, fontSize: 13, fontWeight: '700', color: '#aaa', textTransform: 'uppercase', letterSpacing: 0.8 },
   refreshBtn: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },

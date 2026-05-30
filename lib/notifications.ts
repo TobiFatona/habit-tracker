@@ -78,6 +78,40 @@ export async function cancelAllNotifications(): Promise<void> {
   await Notifications.cancelAllScheduledNotificationsAsync();
 }
 
+const COACHING_NOTIF_ID = 'coaching-daily';
+
+export async function scheduleCoachingNotification(content: string): Promise<void> {
+  if (Platform.OS === 'web') return;
+
+  const { status } = await Notifications.getPermissionsAsync();
+  if (status !== 'granted') return;
+
+  // Cancel previous coaching notification
+  await Notifications.cancelScheduledNotificationAsync(COACHING_NOTIF_ID).catch(() => {});
+
+  const now = new Date();
+  const target = new Date();
+  target.setHours(15, 0, 0, 0); // 3:00 PM
+
+  // If 3 PM already passed today, push to tomorrow
+  if (now >= target) target.setDate(target.getDate() + 1);
+
+  // Trim body to ~150 chars for notification
+  const body = content.length > 150 ? content.slice(0, 147) + '…' : content;
+
+  await Notifications.scheduleNotificationAsync({
+    identifier: COACHING_NOTIF_ID,
+    content: {
+      title: '✨ Your Daily Coaching',
+      body,
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DATE,
+      date: target,
+    },
+  });
+}
+
 export async function sendChallengeNudge(daysLeft: number): Promise<void> {
   if (Platform.OS === 'web') return;
   await Notifications.scheduleNotificationAsync({
