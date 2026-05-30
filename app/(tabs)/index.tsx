@@ -1,10 +1,12 @@
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
 import { Animated, AppState as RNAppState, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import CelebrationOverlay from '../../components/CelebrationOverlay';
 import ChallengeCard from '../../components/ChallengeCard';
+import CoachingCard from '../../components/CoachingCard';
 import HabitRow from '../../components/HabitRow';
 import { useAuth } from '../../lib/auth-context';
 import { successBurst } from '../../lib/haptics';
@@ -45,22 +47,55 @@ export default function HomeScreen() {
   const footerTapCount = useRef(0);
   const footerTapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const initialSyncDone = useRef(false);
+
+  // Reload from local cache every time the screen comes into focus (e.g. after add modal closes)
+  useFocusEffect(
+    useCallback(() => {
+      async function loadLocal() {
+        const [h, c] = await Promise.all([loadHabits(), loadChallenges()]);
+        setHabits(h);
+        setChallenges(c);
+        setLoaded(true);
+      }
+      loadLocal();
+    }, [])
+  );
+
+  // Supabase background sync — runs once on mount, merges instead of replacing
   useEffect(() => {
-    async function load() {
-      const [h, c] = await Promise.all([loadHabits(), loadChallenges()]);
-      setHabits(h);
-      setChallenges(c);
-      setLoaded(true);
-      // Background sync from Supabase
-      fetchHabitsFromSupabase().then((remote) => {
-        if (remote) { setHabits(remote); saveHabits(remote); }
+    if (initialSyncDone.current) return;
+    initialSyncDone.current = true;
+
+    fetchHabitsFromSupabase().then((remote) => {
+      if (!remote) return;
+      setHabits((local) => {
+        const remoteIds = new Set(remote.map((h) => h.id));
+        const localOnly = local.filter((h) => !remoteIds.has(h.id));
+        const merged = [...remote, ...localOnly];
+        saveHabits(merged);
+        return merged;
       });
-      fetchChallengesFromSupabase().then((remote) => {
-        if (remote) { setChallenges(remote); saveChallenges(remote); }
+    });
+
+    fetchChallengesFromSupabase().then((remote) => {
+      if (!remote) return;
+      setChallenges((local) => {
+        const remoteIds = new Set(remote.map((c) => c.id));
+        const localOnly = local.filter((c) => !remoteIds.has(c.id));
+        const merged = [...remote, ...localOnly];
+        saveChallenges(merged);
+        return merged;
       });
-    }
-    load();
-    const sub = RNAppState.addEventListener('change', (s) => { if (s === 'active') load(); });
+    });
+
+    const sub = RNAppState.addEventListener('change', async (s) => {
+      if (s === 'active') {
+        const [h, c] = await Promise.all([loadHabits(), loadChallenges()]);
+        setHabits(h);
+        setChallenges(c);
+      }
+    });
     return () => sub.remove();
   }, []);
 
@@ -81,29 +116,33 @@ export default function HomeScreen() {
     if (allDone && !prevAllDone.current) {
       prevAllDone.current = true;
       const todayStr = today();
-      const updatedChallenges = challenges.map((c) => {
-        if (c.completed || !c.startDate) return c;
-        if (c.completedDays.includes(todayStr)) return c;
-        const newDays = [...c.completedDays, todayStr];
-        const isCompleted = newDays.length >= c.durationDays;
-        return { ...c, completedDays: newDays, completed: isCompleted };
+      // Load fresh challenges from AsyncStorage to avoid stale closure
+      loadChallenges().then((freshChallenges) => {
+        const updatedChallenges = freshChallenges.map((c) => {
+          if (c.completed || !c.startDate) return c;
+          if (c.completedDays.includes(todayStr)) return c;
+          const newDays = [...c.completedDays, todayStr];
+          const isCompleted = newDays.length >= c.durationDays;
+          return { ...c, completedDays: newDays, completed: isCompleted };
+        });
+        const justCompleted = updatedChallenges.find(
+          (c) => c.completed && !freshChallenges.find((old) => old.id === c.id)?.completed
+        );
+        setChallenges(updatedChallenges);
+        saveChallenges(updatedChallenges);
+        if (userId) {
+          updatedChallenges
+            .filter((c) => c.startDate)
+            .forEach((c) => pushChallengeUpdate(c, userId));
+        }
+        if (justCompleted) {
+          successBurst();
+          setCelebrationMsg({ msg: 'Challenge Complete! 🏆', sub: `You finished the ${justCompleted.name}!` });
+        } else {
+          setCelebrationMsg({ msg: 'All done! 🎉', sub: 'Amazing work today.' });
+        }
+        setShowCelebration(true);
       });
-      const justCompleted = updatedChallenges.find(
-        (c) => c.completed && !challenges.find((old) => old.id === c.id)?.completed
-      );
-      setChallenges(updatedChallenges);
-      if (userId) {
-        updatedChallenges
-          .filter((c) => c.startDate)
-          .forEach((c) => pushChallengeUpdate(c, userId));
-      }
-      if (justCompleted) {
-        successBurst();
-        setCelebrationMsg({ msg: 'Challenge Complete! 🏆', sub: `You finished the ${justCompleted.name}!` });
-      } else {
-        setCelebrationMsg({ msg: 'All done! 🎉', sub: 'Amazing work today.' });
-      }
-      setShowCelebration(true);
     } else if (!allDone) {
       prevAllDone.current = false;
     }
@@ -196,6 +235,8 @@ export default function HomeScreen() {
         </View>
 
         {activeChallenge && <ChallengeCard challenge={activeChallenge} />}
+
+        <CoachingCard />
 
         <View style={styles.list}>
           {habits.map((h) => (
