@@ -12,9 +12,11 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useAuth } from '../lib/auth-context';
 import { lightTap, mediumTap } from '../lib/haptics';
 import { formatTime } from '../lib/notifications';
 import { loadHabits, saveHabits, today } from '../lib/storage';
+import { pushHabitDelete, pushHabitUpsert } from '../lib/sync';
 import { Habit, HabitReminder, HabitType } from '../lib/types';
 
 const EMOJI_OPTIONS = [
@@ -27,6 +29,7 @@ const PURPLE = '#6C63FF';
 const GREEN = '#22C55E';
 
 export default function AddHabitScreen() {
+  const { userId } = useAuth();
   const { id } = useLocalSearchParams<{ id?: string }>();
   const isEditing = Boolean(id);
 
@@ -73,6 +76,8 @@ export default function AddHabitScreen() {
         h.id === id ? { ...h, name: name.trim(), emoji, type, targetCount, reminder } : h
       );
       await saveHabits(updated);
+      const updatedHabit = updated.find((h) => h.id === id);
+      if (userId && updatedHabit) pushHabitUpsert(updatedHabit, userId);
     } else {
       const newHabit: Habit = {
         id: Date.now().toString(),
@@ -87,6 +92,7 @@ export default function AddHabitScreen() {
         reminder,
       };
       await saveHabits([...habits, newHabit]);
+      if (userId) pushHabitUpsert(newHabit, userId);
     }
     router.back();
   }
@@ -96,6 +102,7 @@ export default function AddHabitScreen() {
     lightTap();
     const habits = await loadHabits();
     await saveHabits(habits.filter((h) => h.id !== id));
+    pushHabitDelete(id);
     router.back();
   }
 

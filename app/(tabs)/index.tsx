@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import CelebrationOverlay from '../../components/CelebrationOverlay';
 import ChallengeCard from '../../components/ChallengeCard';
 import HabitRow from '../../components/HabitRow';
+import { useAuth } from '../../lib/auth-context';
 import { successBurst } from '../../lib/haptics';
 import {
   calcStreak,
@@ -16,6 +17,13 @@ import {
   saveHabits,
   today,
 } from '../../lib/storage';
+import {
+  fetchChallengesFromSupabase,
+  fetchHabitsFromSupabase,
+  pushChallengeUpdate,
+  pushCountIncrement,
+  pushHabitToggle,
+} from '../../lib/sync';
 import { Challenge, Habit } from '../../lib/types';
 
 function getDayName() {
@@ -26,6 +34,7 @@ function getDateLabel() {
 }
 
 export default function HomeScreen() {
+  const { userId, signOut } = useAuth();
   const [habits, setHabits] = useState<Habit[]>([]);
   const [challenges, setChallenges] = useState<Challenge[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -42,6 +51,13 @@ export default function HomeScreen() {
       setHabits(h);
       setChallenges(c);
       setLoaded(true);
+      // Background sync from Supabase
+      fetchHabitsFromSupabase().then((remote) => {
+        if (remote) { setHabits(remote); saveHabits(remote); }
+      });
+      fetchChallengesFromSupabase().then((remote) => {
+        if (remote) { setChallenges(remote); saveChallenges(remote); }
+      });
     }
     load();
     const sub = RNAppState.addEventListener('change', (s) => { if (s === 'active') load(); });
@@ -76,6 +92,11 @@ export default function HomeScreen() {
         (c) => c.completed && !challenges.find((old) => old.id === c.id)?.completed
       );
       setChallenges(updatedChallenges);
+      if (userId) {
+        updatedChallenges
+          .filter((c) => c.startDate)
+          .forEach((c) => pushChallengeUpdate(c, userId));
+      }
       if (justCompleted) {
         successBurst();
         setCelebrationMsg({ msg: 'Challenge Complete! 🏆', sub: `You finished the ${justCompleted.name}!` });
@@ -86,7 +107,7 @@ export default function HomeScreen() {
     } else if (!allDone) {
       prevAllDone.current = false;
     }
-  }, [allDone, loaded]);
+  }, [allDone, loaded, userId]);
 
   const toggle = useCallback((id: string) => {
     const todayStr = today();
@@ -96,12 +117,15 @@ export default function HomeScreen() {
         if (h.type === 'count') {
           const dailyCounts = { ...h.dailyCounts, [todayStr]: 0 };
           const completedDates = h.completedDates.filter((d) => d !== todayStr);
+          pushCountIncrement(id, todayStr, 0);
           return { ...h, dailyCounts, completedDates, streak: calcStreak(completedDates) };
         }
         const already = h.completedDates.includes(todayStr);
-        const completedDates = already
-          ? h.completedDates.filter((d) => d !== todayStr)
-          : [...h.completedDates, todayStr];
+        const isDone = !already;
+        const completedDates = isDone
+          ? [...h.completedDates, todayStr]
+          : h.completedDates.filter((d) => d !== todayStr);
+        pushHabitToggle(id, todayStr, isDone);
         return { ...h, completedDates, streak: calcStreak(completedDates) };
       })
     );
@@ -119,6 +143,7 @@ export default function HomeScreen() {
           next >= h.targetCount && !h.completedDates.includes(todayStr)
             ? [...h.completedDates, todayStr]
             : h.completedDates;
+        pushCountIncrement(id, todayStr, next);
         return { ...h, dailyCounts, completedDates, streak: calcStreak(completedDates) };
       })
     );
@@ -153,9 +178,14 @@ export default function HomeScreen() {
               {allDone ? '🎉 All done — great work!' : `${doneCount} of ${total} completed`}
             </Text>
           </View>
-          <TouchableOpacity style={styles.addBtn} onPress={() => router.push('/add')}>
-            <Text style={styles.addBtnText}>+</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TouchableOpacity style={styles.iconBtn} onPress={signOut}>
+              <Text style={styles.iconBtnText}>⎋</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.addBtn} onPress={() => router.push('/add')}>
+              <Text style={styles.addBtnText}>+</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         <View style={styles.progressWrap}>
@@ -197,6 +227,8 @@ const styles = StyleSheet.create({
   dayLabel: { fontSize: 14, color: '#888', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1.5 },
   dateLabel: { fontSize: 32, fontWeight: '800', color: '#fff', marginTop: 4 },
   subtitle: { fontSize: 15, color: '#ccc', marginTop: 6 },
+  iconBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#1A1929', alignItems: 'center', justifyContent: 'center', marginTop: 4, borderWidth: 1, borderColor: '#2A2840' },
+  iconBtnText: { color: '#888', fontSize: 18 },
   addBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: PURPLE, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
   addBtnText: { color: '#fff', fontSize: 24, fontWeight: '300', lineHeight: 28 },
   progressWrap: { flexDirection: 'row', alignItems: 'center', marginBottom: 24, gap: 12 },

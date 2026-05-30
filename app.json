@@ -25,7 +25,13 @@
     "plugins": [
       "expo-asset",
       "expo-router",
-      ["expo-notifications", { "color": "#6C63FF" }]
+      [
+        "expo-notifications",
+        {
+          "color": "#6C63FF"
+        }
+      ],
+      "expo-secure-store"
     ]
   }
 }

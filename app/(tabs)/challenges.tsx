@@ -3,8 +3,10 @@ import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useAuth } from '../../lib/auth-context';
 import { mediumTap } from '../../lib/haptics';
 import { loadChallenges, saveChallenges, today } from '../../lib/storage';
+import { fetchChallengesFromSupabase, pushChallengeUpdate } from '../../lib/sync';
 import { Challenge } from '../../lib/types';
 
 const PURPLE = '#6C63FF';
@@ -45,10 +47,16 @@ function DayGrid({ challenge }: { challenge: Challenge }) {
 }
 
 export default function ChallengesScreen() {
+  const { userId } = useAuth();
   const [challenges, setChallenges] = useState<Challenge[]>([]);
 
   useEffect(() => {
-    loadChallenges().then(setChallenges);
+    loadChallenges().then((local) => {
+      setChallenges(local);
+      fetchChallengesFromSupabase().then((remote) => {
+        if (remote) { setChallenges(remote); saveChallenges(remote); }
+      });
+    });
   }, []);
 
   async function startChallenge(id: string) {
@@ -58,6 +66,8 @@ export default function ChallengesScreen() {
     );
     setChallenges(updated);
     await saveChallenges(updated);
+    const started = updated.find((c) => c.id === id);
+    if (userId && started) pushChallengeUpdate(started, userId);
   }
 
   const active = challenges.filter((c) => c.startDate && !c.completed);

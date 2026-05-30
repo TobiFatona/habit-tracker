@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import WeeklyChart from '../../components/WeeklyChart';
-import { getConsistency, isHabitDoneToday, loadHabits, today } from '../../lib/storage';
+import { getConsistency, isHabitDoneToday, loadHabits, saveHabits, today } from '../../lib/storage';
+import { fetchHabitsFromSupabase } from '../../lib/sync';
 import { Habit } from '../../lib/types';
 
 const PURPLE = '#6C63FF';
@@ -65,7 +66,12 @@ export default function AnalyticsScreen() {
   const [habits, setHabits] = useState<Habit[]>([]);
 
   useEffect(() => {
-    loadHabits().then(setHabits);
+    loadHabits().then((local) => {
+      setHabits(local);
+      fetchHabitsFromSupabase().then((remote) => {
+        if (remote) { setHabits(remote); saveHabits(remote); }
+      });
+    });
   }, []);
 
   const days = currentMonth();

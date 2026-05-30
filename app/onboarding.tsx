@@ -3,9 +3,11 @@ import { router } from 'expo-router';
 import { useRef, useState } from 'react';
 import { Dimensions, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useAuth } from '../lib/auth-context';
 import { mediumTap, successBurst } from '../lib/haptics';
 import { cancelAllNotifications, requestPermission, scheduleDailyReminder } from '../lib/notifications';
 import { DEFAULT_CHALLENGE, loadChallenges, saveAppState, saveChallenges, today } from '../lib/storage';
+import { migrateLocalDataToSupabase, pushProfileUpdate } from '../lib/sync';
 
 const { width } = Dimensions.get('window');
 
@@ -47,6 +49,7 @@ const SLIDES = [
 ];
 
 export default function Onboarding() {
+  const { userId } = useAuth();
   const [slide, setSlide] = useState(0);
   const [acceptedChallenge, setAcceptedChallenge] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
@@ -78,6 +81,10 @@ export default function Onboarding() {
     if (notifGranted) await scheduleDailyReminder();
     else await cancelAllNotifications();
     await saveAppState({ onboardingComplete: true, notificationsEnabled: notifGranted });
+    if (userId) {
+      migrateLocalDataToSupabase(userId);
+      pushProfileUpdate(userId, { onboarding_complete: true, notifications_enabled: notifGranted });
+    }
     router.replace('/(tabs)/');
   }
 
