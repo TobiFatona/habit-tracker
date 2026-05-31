@@ -192,6 +192,39 @@ export async function pushProfileUpdate(
   } catch {}
 }
 
+// ─── Merge helper ────────────────────────────────────────────────────────────
+// Union completedDates + dailyCounts from both sources so local history is
+// never lost when remote is behind (e.g. pushes failed for old numeric IDs).
+
+export function mergeHabits(remote: Habit[], local: Habit[]): Habit[] {
+  const localMap = new Map(local.map((h) => [h.id, h]));
+  const remoteIds = new Set(remote.map((h) => h.id));
+
+  const merged = remote.map((remoteHabit) => {
+    const localHabit = localMap.get(remoteHabit.id);
+    if (!localHabit) return remoteHabit;
+
+    // Union of dates from both sources
+    const allDates = Array.from(
+      new Set([...localHabit.completedDates, ...remoteHabit.completedDates])
+    ).sort();
+
+    // Merge counts — local wins (more up-to-date than in-flight pushes)
+    const mergedCounts = { ...remoteHabit.dailyCounts, ...localHabit.dailyCounts };
+
+    return {
+      ...remoteHabit,
+      completedDates: allDates,
+      dailyCounts: mergedCounts,
+      streak: calcStreak(allDates),
+    };
+  });
+
+  // Keep local-only habits (not yet in Supabase)
+  const localOnly = local.filter((h) => !remoteIds.has(h.id));
+  return [...merged, ...localOnly];
+}
+
 // ─── One-time migration (local AsyncStorage → Supabase) ─────────────────────
 
 export async function migrateLocalDataToSupabase(userId: string): Promise<void> {

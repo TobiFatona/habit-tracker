@@ -22,6 +22,7 @@ import {
 import {
   fetchChallengesFromSupabase,
   fetchHabitsFromSupabase,
+  mergeHabits,
   pushChallengeUpdate,
   pushCountIncrement,
   pushHabitToggle,
@@ -70,9 +71,7 @@ export default function HomeScreen() {
     fetchHabitsFromSupabase().then((remote) => {
       if (!remote) return;
       setHabits((local) => {
-        const remoteIds = new Set(remote.map((h) => h.id));
-        const localOnly = local.filter((h) => !remoteIds.has(h.id));
-        const merged = [...remote, ...localOnly];
+        const merged = mergeHabits(remote, local);
         saveHabits(merged);
         return merged;
       });

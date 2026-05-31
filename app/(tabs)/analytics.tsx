@@ -1,11 +1,10 @@
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ReflectionCard from '../../components/ReflectionCard';
 import WeeklyChart from '../../components/WeeklyChart';
-import { getConsistency, isHabitDoneToday, loadHabits, saveHabits, today } from '../../lib/storage';
-import { fetchHabitsFromSupabase } from '../../lib/sync';
+import { getConsistency, isHabitDoneToday, loadHabits, today } from '../../lib/storage';
 import { Habit } from '../../lib/types';
 
 const PURPLE = '#6C63FF';
@@ -66,30 +65,15 @@ function StatCard({ label, value, sub, accent = PURPLE, wide }: StatCardProps) {
 
 export default function AnalyticsScreen() {
   const [habits, setHabits] = useState<Habit[]>([]);
-  const initialSyncDone = useRef(false);
 
-  // Reload from local cache every time this tab comes into focus
+  // Reload from local cache every time this tab comes into focus.
+  // Home screen's sync keeps AsyncStorage authoritative — no separate Supabase
+  // fetch here, which was overwriting local completion history with empty remote data.
   useFocusEffect(
     useCallback(() => {
       loadHabits().then(setHabits);
     }, [])
   );
-
-  // One-time Supabase sync on mount, merge so local-only habits are preserved
-  useEffect(() => {
-    if (initialSyncDone.current) return;
-    initialSyncDone.current = true;
-    fetchHabitsFromSupabase().then((remote) => {
-      if (!remote) return;
-      setHabits((local) => {
-        const remoteIds = new Set(remote.map((h) => h.id));
-        const localOnly = local.filter((h) => !remoteIds.has(h.id));
-        const merged = [...remote, ...localOnly];
-        saveHabits(merged);
-        return merged;
-      });
-    });
-  }, []);
 
   const days = currentMonth();
   const todayStr = today();
