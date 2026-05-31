@@ -1,10 +1,12 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Notifications from 'expo-notifications';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../lib/auth-context';
-import { mediumTap } from '../../lib/haptics';
+import { mediumTap, successBurst } from '../../lib/haptics';
 import { loadChallenges, saveChallenges, today } from '../../lib/storage';
 import { fetchChallengesFromSupabase, pushChallengeUpdate } from '../../lib/sync';
 import { Challenge } from '../../lib/types';
@@ -49,25 +51,105 @@ function DayGrid({ challenge }: { challenge: Challenge }) {
 export default function ChallengesScreen() {
   const { userId } = useAuth();
   const [challenges, setChallenges] = useState<Challenge[]>([]);
+  const initialSyncDone = useRef(false);
 
+  // Reload from local cache every time this tab comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      loadChallenges().then(setChallenges);
+    }, [])
+  );
+
+  // One-time Supabase sync on mount, merge so local defaults are preserved
   useEffect(() => {
-    loadChallenges().then((local) => {
-      setChallenges(local);
-      fetchChallengesFromSupabase().then((remote) => {
-        if (remote) { setChallenges(remote); saveChallenges(remote); }
+    if (initialSyncDone.current) return;
+    initialSyncDone.current = true;
+    fetchChallengesFromSupabase().then((remote) => {
+      if (!remote) return;
+      setChallenges((cur) => {
+        const remoteIds = new Set(remote.map((c) => c.id));
+        const localOnly = cur.filter((c) => !remoteIds.has(c.id));
+        const merged = [...remote, ...localOnly];
+        saveChallenges(merged);
+        return merged;
       });
     });
   }, []);
 
   async function startChallenge(id: string) {
     mediumTap();
-    const updated = challenges.map((c) =>
-      c.id !== id ? c : { ...c, startDate: today(), completedDays: [], completed: false, rewardClaimed: false }
-    );
+    const existing = challenges.find((c) => c.id === id);
+    let updated: Challenge[];
+
+    if (existing) {
+      updated = challenges.map((c) =>
+        c.id !== id ? c : { ...c, startDate: today(), completedDays: [], completed: false, rewardClaimed: false }
+      );
+    } else {
+      // Preset not yet in local list — add it
+      const preset = PRESET_CHALLENGES.find((p) => p.id === id);
+      if (!preset) return;
+      const newChallenge: Challenge = {
+        ...preset,
+        startDate: today(),
+        completedDays: [],
+        completed: false,
+        rewardClaimed: false,
+      };
+      updated = [...challenges, newChallenge];
+    }
+
     setChallenges(updated);
     await saveChallenges(updated);
     const started = updated.find((c) => c.id === id);
     if (userId && started) pushChallengeUpdate(started, userId);
+  }
+
+  async function simulateChallengeCompletion() {
+    mediumTap();
+    const target = challenges.find((c) => c.startDate && !c.completed);
+    if (!target) {
+      Alert.alert('No active challenge', 'Start a challenge first, then simulate completion.');
+      return;
+    }
+    const days: string[] = [];
+    for (let i = 0; i < target.durationDays; i++) {
+      const d = new Date(target.startDate!);
+      d.setDate(d.getDate() + i);
+      days.push(d.toISOString().split('T')[0]);
+    }
+    const patched = challenges.map((c) =>
+      c.id !== target.id ? c : { ...c, completedDays: days, completed: true }
+    );
+    setChallenges(patched);
+    await saveChallenges(patched);
+    if (userId) pushChallengeUpdate({ ...target, completedDays: days, completed: true }, userId);
+    successBurst();
+    Alert.alert('✅ Challenge completed!', `"${target.name}" is now marked as complete.\nSwitch to Home to see the celebration overlay.`);
+  }
+
+  async function simulatePushNotification() {
+    mediumTap();
+    const { status } = await Notifications.getPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Notifications off', 'Enable notifications in your device settings to test this.');
+      return;
+    }
+    // Use cached coaching content if available, otherwise use a sample
+    let body = 'You\'ve been crushing your meditation streak — 11 days strong! Water intake has dipped this week though; try keeping a bottle on your desk as a visual cue.';
+    try {
+      const raw = await AsyncStorage.getItem('coaching_cache_v1');
+      if (raw) {
+        const cache = JSON.parse(raw);
+        if (cache?.content) body = cache.content;
+      }
+    } catch {}
+    const trimmed = body.length > 150 ? body.slice(0, 147) + '…' : body;
+    await Notifications.scheduleNotificationAsync({
+      content: { title: '✨ Your Daily Coaching', body: trimmed },
+      trigger: null, // fires immediately
+    });
+    Alert.alert('📲 Notification sent!', 'Check your notification tray — it fired immediately using your latest coaching content.');
   }
 
   const active = challenges.filter((c) => c.startDate && !c.completed);
@@ -179,6 +261,25 @@ export default function ChallengesScreen() {
             <Text style={styles.emptyBody}>Tap "+ Custom" to create your own, or start a preset above.</Text>
           </View>
         )}
+
+        {/* Testing */}
+        <View style={styles.testSection}>
+          <Text style={styles.testLabel}>⚙️  Testing</Text>
+          <TouchableOpacity style={styles.testBtn} onPress={simulateChallengeCompletion}>
+            <Text style={styles.testBtnIcon}>🏆</Text>
+            <View style={styles.testBtnText}>
+              <Text style={styles.testBtnTitle}>Simulate Challenge Completion</Text>
+              <Text style={styles.testBtnSub}>Marks active challenge as fully done</Text>
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.testBtn} onPress={simulatePushNotification}>
+            <Text style={styles.testBtnIcon}>📲</Text>
+            <View style={styles.testBtnText}>
+              <Text style={styles.testBtnTitle}>Simulate Push Notification</Text>
+              <Text style={styles.testBtnSub}>Fires an immediate coaching notification</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -231,4 +332,34 @@ const styles = StyleSheet.create({
   emptyEmoji: { fontSize: 48 },
   emptyTitle: { fontSize: 18, fontWeight: '700', color: '#fff' },
   emptyBody: { fontSize: 14, color: '#888', textAlign: 'center', lineHeight: 20 },
+
+  testSection: {
+    marginTop: 32,
+    borderTopWidth: 1,
+    borderTopColor: '#2A2840',
+    paddingTop: 20,
+    gap: 10,
+  },
+  testLabel: {
+    fontSize: 11,
+    color: '#555',
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  testBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1A1929',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#2A2840',
+    gap: 12,
+  },
+  testBtnIcon: { fontSize: 22 },
+  testBtnText: { flex: 1 },
+  testBtnTitle: { fontSize: 14, fontWeight: '700', color: '#ccc' },
+  testBtnSub: { fontSize: 12, color: '#555', marginTop: 2 },
 });
